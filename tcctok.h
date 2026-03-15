@@ -306,7 +306,7 @@
 #if defined TCC_TARGET_PE
      DEF(TOK___chkstk, "__chkstk")
 #endif
-#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64
+#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64 || defined TCC_TARGET_CPUTWO
      DEF(TOK___arm64_clear_cache, "__arm64_clear_cache")
      DEF(TOK___addtf3, "__addtf3")
      DEF(TOK___subtf3, "__subtf3")
@@ -427,4 +427,8 @@
 
 #if defined TCC_TARGET_RISCV64
 #include "riscv64-tok.h"
+#endif
+
+#if defined TCC_TARGET_CPUTWO
+#include "cpuTwo-tok.h"
 #endif

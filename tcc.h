@@ -400,6 +400,7 @@ extern long double strtold (const char *__nptr, char **__endptr);
 #elif defined(TCC_TARGET_CPUTWO)
 # include "cpuTwo-gen.c"
 # include "cpuTwo-link.c"
+# include "cpuTwo-asm.c"
 #else
 #error unknown target
 #endif
