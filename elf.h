@@ -268,6 +268,7 @@ typedef struct
 #define EM_TILEPRO	188		/* Tilera TILEPro */
 #define EM_TILEGX	191		/* Tilera TILE-Gx */
 #define EM_RISCV	243	        /* RISC-V */
+#define EM_CPUTWO	0x9002		/* CPUTwo (custom) */
 #define EM_NUM		253
 
 /* If it is necessary to assign new unofficial EM_* values, please
