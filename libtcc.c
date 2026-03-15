@@ -1012,8 +1012,14 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 #else
     /* paths for crt objects */
     tcc_split_path(s, &s->crt_paths, &s->nb_crt_paths, CONFIG_TCC_CRTPREFIX);
+#if defined TCC_TARGET_CPUTWO
+    /* CPUTwo bare-metal: always add startup objects regardless of -nostdlib */
+    if (output_type != TCC_OUTPUT_MEMORY)
+        tccelf_add_crtbegin(s);
+#else
     if (output_type != TCC_OUTPUT_MEMORY && !s->nostdlib)
         tccelf_add_crtbegin(s);
+#endif
 #endif
     return 0;
 }

@@ -56,7 +56,8 @@ $(Cbt)WIN_O += bt-dll.o
 $(Cbc)COMMON_O += bcheck.o
 
 # not in libtcc1.a
-EXTRA_O = runmain.o bt-exe.o bt-dll.o bt-log.o bcheck.o
+EXTRA_O = runmain.o bt-exe.o bt-dll.o bt-log.o bcheck.o \
+          cputwo-crt1.o cputwo-crti.o cputwo-crtn.o
 
 OBJ-i386 = $(I386_O) pic86.o $(LIN_O)
 OBJ-x86_64 = $(X86_64_O) $(LIN_O)
@@ -73,6 +74,8 @@ OBJ-arm-eabi = $(OBJ-arm)
 OBJ-arm-eabihf = $(OBJ-arm)
 OBJ-arm-wince = $(ARM_O) $(WIN_O)
 OBJ-riscv64 = $(RISCV64_O) $(LIN_O)
+CPUTWO_O = lib-cputwo.o cputwo-crt1.o cputwo-crti.o cputwo-crtn.o
+OBJ-cputwo = $(CPUTWO_O)
 
 OBJ-extra = $(filter $(EXTRA_O),$(OBJ-$T))
 OBJ-libtcc1 = $(addprefix $(X),$(filter-out $(OBJ-extra),$(OBJ-$T)))
@@ -98,8 +101,17 @@ $(TOP)/bcheck.o : XFLAGS += $(BFLAGS)
 $(X)crt1w.o : crt1.c
 $(X)wincrt1w.o : wincrt1.c
 
+# CPUTwo: standalone CRT objects (go to $(TOP)/, not inside archive)
+# Note: no $(X) prefix -- cputwo- is already part of the filename
+$(TOP)/cputwo-crt1.o : $(TOPSRC)/lib/crt1-cputwo.S $(TCC)
+	$S$(XCC) -c $< -o $@ $(XFLAGS)
+$(TOP)/cputwo-crti.o : $(TOPSRC)/lib/crti-cputwo.S $(TCC)
+	$S$(XCC) -c $< -o $@ $(XFLAGS)
+$(TOP)/cputwo-crtn.o : $(TOPSRC)/lib/crtn-cputwo.S $(TCC)
+	$S$(XCC) -c $< -o $@ $(XFLAGS)
+
 # don't try to make it
 $(TCC) : ;
 
 clean :
-	rm -f *.o $(addprefix $(TOP)/,*libtcc1.a $(EXTRA_O))
+	rm -f *.o $(addprefix $(TOP)/,*libtcc1.a $(EXTRA_O)) $(TOP)/$(X)cputwo-crt*.o

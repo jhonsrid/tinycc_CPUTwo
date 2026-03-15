@@ -1771,6 +1771,12 @@ ST_FUNC void tccelf_add_crtbegin(TCCState *s1)
         tcc_add_crt(s1, "crtbegin_so.o");
     else
         tcc_add_crt(s1, "crtbegin_dynamic.o");
+#elif defined TCC_TARGET_CPUTWO
+    /* CPUTwo bare-metal: CRT objects are in crt_paths as cputwo-*.o */
+    if (s1->output_type != TCC_OUTPUT_DLL) {
+        tcc_add_crt(s1, "cputwo-crt1.o");
+        tcc_add_crt(s1, "cputwo-crti.o");
+    }
 #else
     if (s1->output_type != TCC_OUTPUT_DLL)
         tcc_add_crt(s1, "crt1.o");
@@ -1796,6 +1802,9 @@ ST_FUNC void tccelf_add_crtend(TCCState *s1)
         tcc_add_crt(s1, "crtend_so.o");
     else
         tcc_add_crt(s1, "crtend_android.o");
+#elif defined TCC_TARGET_CPUTWO
+    /* CPUTwo bare-metal: crtn is in crt_paths as cputwo-crtn.o */
+    tcc_add_crt(s1, "cputwo-crtn.o");
 #else
     tcc_add_crt(s1, "crtn.o");
 #endif
@@ -1857,6 +1866,15 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
             tccelf_add_crtend(s1);
 #endif
     }
+#if defined TCC_TARGET_CPUTWO
+    /* CPUTwo bare-metal: always add soft-float lib and crt end regardless of -nostdlib */
+    else {
+        if (TCC_LIBTCC1[0])
+            tcc_add_support(s1, TCC_LIBTCC1);
+        if (s1->output_type != TCC_OUTPUT_MEMORY)
+            tccelf_add_crtend(s1);
+    }
+#endif
 }
 #endif /* ndef TCC_TARGET_PE */
 

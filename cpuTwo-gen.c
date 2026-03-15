@@ -564,13 +564,13 @@ ST_FUNC void gen_opi(int op)
         case TOK_UGE:
         case TOK_ULE:
         case TOK_UGT:
-            if (fits16u) {
+            if (fits16s || fits16u) {
                 vswap(); gv(RC_INT); a = ireg(vtop->r); vtop--;
-                /* Don't emit CMPI here — defer to gjmp_cond/load so flags aren't
-                   clobbered.  Encode: high byte 0xFF = "CMPI mode", c.i = immediate. */
+                /* Load the immediate into scratch register r12 to avoid
+                   storing fc in c.i (which overlaps jtrue/jfalse in the union). */
+                load_imm32(PREG_SCR, (uint32_t)fc);
                 vset_VT_CMP(op);
-                vtop->cmp_r = a | (0xFF << 8); /* 0xFF sentinel: CMPI */
-                vtop->c.i = fc;
+                vtop->cmp_r = a | (PREG_SCR << 8);
                 return;
             }
             break;
@@ -598,6 +598,16 @@ ST_FUNC void gen_opi(int op)
         }
         tcc_error("gen_opi: unimplemented op '%s'", get_tok_str(op, NULL));
         break;
+    case TOK_UMULL: {
+        /* Unsigned 32x32→64 multiply: result low in vtop->r, high in vtop->r2 */
+        /* a = left input reg, b = right input reg (both already loaded by gv2) */
+        /* vtop->r = d already allocated as the low-word result register */
+        int rhi = get_reg(RC_INT);  /* allocate second register for high word */
+        o_R(OP_MUL,   ireg(d), a, b, 0);    /* low 32 bits: d = a * b */
+        o_R(OP_MULHU, ireg(rhi), a, b, 0);  /* high 32 bits: rhi = (a*b)>>32 */
+        vtop->r2 = rhi;
+        return;
+    }
     case '+':   r_op = OP_ADD;  break;
     case '-':   r_op = OP_SUB;  break;
     case '&':   r_op = OP_AND;  break;
@@ -659,13 +669,14 @@ static void softfloat_cmp2(const char *name, int int_op)
     vpush_helper_func(tok_alloc_const(name));
     vrott(3);
     gfunc_call(2);
-    /* Helper returned an int in r0 — compare against 0 */
+    /* Helper returned an int in r0 — compare against 0 via MOVI r12, 0 + CMP */
     vpushi(0);
     vtop->type.t = VT_INT;
     vtop->r = REG_IRET;
     vset_VT_CMP(int_op);
-    vtop->cmp_r = 0 | (0xFF << 8); /* a=r0, 0xFF=CMPI sentinel */
-    vtop->c.i   = 0;                /* compare against immediate 0 */
+    /* Load 0 into scratch register r12 for the register compare */
+    o_I(OP_MOVI, PREG_SCR, 0, 0);  /* r12 = 0 */
+    vtop->cmp_r = 0 | (PREG_SCR << 8); /* CMP r0, r12 */
 }
 
 /* ------------------------------------------------------------------ */
@@ -910,12 +921,9 @@ ST_FUNC int gjmp_cond(int op, int t)
     int b       = (vtop->cmp_r >> 8) & 0xFF;
     int invcond;   /* inverted condition: branches OVER gjmp when cond false */
 
-    /* Emit comparison: CMPI if b==0xFF (immediate sentinel), CMP otherwise */
-    if (b == 0xFF) {
-        o_I(OP_CMPI, 0, a, (uint16_t)(vtop->c.i & 0xFFFF));
-    } else {
-        o_R(OP_CMP, 0, a, b, 0);
-    }
+    /* Emit CMP: always register vs register.
+       For immediate comparisons, the immediate was pre-loaded into r12 (PREG_SCR). */
+    o_R(OP_CMP, 0, a, b, 0);
 
     switch (op) {
     case TOK_EQ:  invcond = COND_NE;  break;
