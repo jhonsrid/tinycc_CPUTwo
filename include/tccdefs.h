@@ -282,7 +282,7 @@
                                   & -(__alignof__(type)))
     #define __builtin_va_arg(ap,type) (*(sizeof(type) > (2*__va_reg_size) ? *(type **)((ap += __va_reg_size) - __va_reg_size) : (ap = (va_list)(_tcc_align(ap,type) + (sizeof(type)+__va_reg_size - 1)& -__va_reg_size), (type *)(ap - ((sizeof(type)+ __va_reg_size - 1)& -__va_reg_size)))))
 
-#elif defined __CPUTWO__
+#elif defined TCC_TARGET_CPUTWO
     /* CPUTwo: register-based ABI, args spilled at decreasing offsets from FP.
      * gfunc_prolog spills r0-r3 to [FP-12],[FP-16],[FP-20],[FP-24].
      * va_start: ap = &last - sizeof(last) → points to first variadic slot.
