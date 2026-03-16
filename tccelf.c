@@ -793,8 +793,25 @@ ST_FUNC void put_elf_reloca(Section *symtab, Section *s, unsigned long offset,
 #if SHT_RELX == SHT_RELA
     rel->r_addend = addend;
 #endif
-    if (SHT_RELX != SHT_RELA && addend)
+    if (SHT_RELX != SHT_RELA && addend) {
+#if defined TCC_TARGET_CPUTWO
+        /* CPUTwo REL format: embed the addend in the data slot.
+           The relocator reads lnk_read_be32(ptr) + sym_val, so
+           pre-loading the addend here gives S + A at link time. */
+        if (offset + 4 <= s->data_allocated) {
+            unsigned char *p = s->data + offset;
+            uint32_t cur = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
+                         | ((uint32_t)p[2] <<  8) | (uint32_t)p[3];
+            cur += (uint32_t)addend;
+            p[0] = (cur >> 24) & 0xFF;
+            p[1] = (cur >> 16) & 0xFF;
+            p[2] = (cur >>  8) & 0xFF;
+            p[3] =  cur        & 0xFF;
+        }
+#else
         tcc_error_noabort("non-zero addend on REL architecture");
+#endif
+    }
 }
 
 ST_FUNC void put_elf_reloc(Section *symtab, Section *s, unsigned long offset,

@@ -196,6 +196,14 @@ ST_FUNC void asm_opcode(TCCState *s1, int opcode)
     case TOK_ASM_modu: parse_3reg(&rd, &rs1, &rs2); emit_R(0x26, rd, rs1, rs2, 0); break;
     case TOK_ASM_addc: parse_3reg(&rd, &rs1, &rs2); emit_R(0x2B, rd, rs1, rs2, 0); break;
     case TOK_ASM_subc: parse_3reg(&rd, &rs1, &rs2); emit_R(0x2C, rd, rs1, rs2, 0); break;
+    /* rotate by register */
+    case TOK_ASM_rolr: parse_3reg(&rd, &rs1, &rs2); emit_R(0x39, rd, rs1, rs2, 0); break;
+    case TOK_ASM_rorr: parse_3reg(&rd, &rs1, &rs2); emit_R(0x3A, rd, rs1, rs2, 0); break;
+    /* rotate by immediate (shift field, 0-31) */
+    case TOK_ASM_roli: imm = parse_2reg_int(s1, &rd, &rs1); emit_R(0x3B, rd, rs1, 0, imm & 0x1F); break;
+    case TOK_ASM_rori: imm = parse_2reg_int(s1, &rd, &rs1); emit_R(0x3C, rd, rs1, 0, imm & 0x1F); break;
+    /* atomic compare-and-swap: cas rd, rs1, rs2 */
+    case TOK_ASM_cas:  parse_3reg(&rd, &rs1, &rs2); emit_R(0x3D, rd, rs1, rs2, 0); break;
     /* indexed loads */
     case TOK_ASM_lwx:  parse_3reg(&rd, &rs1, &rs2); emit_R(0x30, rd, rs1, rs2, 0); break;
     case TOK_ASM_lbx:  parse_3reg(&rd, &rs1, &rs2); emit_R(0x31, rd, rs1, rs2, 0); break;

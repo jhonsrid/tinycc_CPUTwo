@@ -956,3 +956,32 @@ int32_t  __fixtfsi(long double f)    { return __fixdfsi((double)f); }
 uint32_t __fixunstfsi(long double f) { return __fixunsdfsi((double)f); }
 int64_t  __fixtfdi(long double f)    { return __fixdfdi((double)f); }
 uint64_t __fixunstfdi(long double f) { return __fixunsdfdi((double)f); }
+
+/* ================================================================
+ * Signed 64-bit integer division / modulo (built on unsigned helpers).
+ * ================================================================ */
+long long __divdi3(long long u, long long v)
+{
+    int sign = 0;
+    unsigned long long a = (unsigned long long)u;
+    unsigned long long b = (unsigned long long)v;
+
+    if ( u < 0 ) { a = (unsigned long long)(-u); sign ^= 1; }
+    if ( v < 0 ) { b = (unsigned long long)(-v); sign ^= 1; }
+
+    unsigned long long q = __udivdi3(a, b);
+    return sign ? -(long long)q : (long long)q;
+}
+
+long long __moddi3(long long u, long long v)
+{
+    unsigned long long a = (unsigned long long)u;
+    unsigned long long b = (unsigned long long)v;
+    int neg = (u < 0);
+
+    if ( u < 0 ) a = (unsigned long long)(-u);
+    if ( v < 0 ) b = (unsigned long long)(-v);
+
+    unsigned long long r = __umoddi3(a, b);
+    return neg ? -(long long)r : (long long)r;
+}

@@ -167,8 +167,9 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
     }
 
     case R_CPUTWO_HI16: {
-        /* Patch the imm16 field (bits 15:0) of a LUI instruction with (val >> 16) */
-        uint16_t hi = (uint16_t)((val + 0x8000u) >> 16);   /* round */
+        /* Patch the imm16 field (bits 15:0) of a LUI instruction with (val >> 16).
+         * No +0x8000 rounding: CPUTwo uses ORI (zero-extend) for LO16, not ADDI. */
+        uint16_t hi = (uint16_t)(val >> 16);
         insn = lnk_read_be32(ptr);
         lnk_write_be32(ptr, (insn & 0xFFFF0000u) | hi);
         return;

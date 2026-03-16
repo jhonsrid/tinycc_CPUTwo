@@ -180,8 +180,8 @@ ST_DATA const int reg_classes[NB_REGS] = {
 #define PREG_FP  11   /* r11 as frame pointer */
 #define PREG_SCR 12   /* r12 as scratch for multi-instruction sequences */
 
-/* Size of the prolog placeholder in bytes (5 instructions) */
-#define FUNC_PROLOG_SIZE (5 * 4)
+/* Size of the prolog placeholder in bytes (4 instructions) */
+#define FUNC_PROLOG_SIZE (4 * 4)
 
 /* ------------------------------------------------------------------ */
 /* Big-endian instruction emission                                      */
@@ -1030,16 +1030,44 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         }
     }
 
-    /* ---- Count explicit register args ---- */
+    /* ---- Count explicit register args and record their types ---- */
     int nreg_explicit = 0;
-    for (sym = func_type->ref->next; sym && (ri + nreg_explicit) < 4; sym = sym->next)
-        nreg_explicit++;
+    int spill_op[4]; /* store opcode for each reg arg spill */
+    {
+        Sym *s = func_type->ref->next;
+        for (; s && (ri + nreg_explicit) < 4; s = s->next) {
+            int bt = s->type.t & VT_BTYPE;
+            /* On big-endian, use narrow stores so that LB/LBU/LH/LHU in the
+             * function body read the correct byte/halfword from the spill slot.
+             * SW stores the value at addr..addr+3 with the byte at addr+3 (LE
+             * position), but LBU reads from addr (the MSB = 0x00). */
+            if (bt == VT_BYTE || bt == VT_BOOL)
+                spill_op[nreg_explicit] = OP_SB;
+            else if (bt == VT_SHORT)
+                spill_op[nreg_explicit] = OP_SH;
+            else
+                spill_op[nreg_explicit] = OP_SW;
+            nreg_explicit++;
+        }
+    }
 
-    /* ---- Reserve frame slots for explicit reg-arg spills ---- */
+    /* For variadic functions, also spill remaining arg registers (after named
+     * params) so __builtin_va_arg can find them adjacent in the frame.
+     * __builtin_va_start sets ap = &last_named - sizeof(last_named), which
+     * points to the slot just below the last named param's spill slot.      */
+    int nreg_spill = nreg_explicit;
+    if (func_var) {
+        while ((ri + nreg_spill) < 4) {
+            spill_op[nreg_spill] = OP_SW;  /* variadic args spilled as full words */
+            nreg_spill++;
+        }
+    }
+
+    /* ---- Reserve frame slots for reg-arg spills ---- */
     /* Hidden-ptr spill (if any) already ate [FP - 12].
        Explicit reg-arg[0] spill goes at loc - 4, etc.            */
     int spill_base = loc - 4;   /* offset for explicit reg-arg[0] spill */
-    loc -= nreg_explicit * 4;
+    loc -= nreg_spill * 4;
 
     /* ---- Reserve prolog placeholder (patched in gfunc_epilog) ---- */
     func_sub_sp_offset = ind;
@@ -1050,8 +1078,8 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         /* Spill hidden ptr (r0) */
         o_I(OP_SW, 0, PREG_FP, func_vc);
     }
-    for (int i = 0; i < nreg_explicit; i++) {
-        o_I(OP_SW, ri + i, PREG_FP, spill_base - i * 4);
+    for (int i = 0; i < nreg_spill; i++) {
+        o_I(spill_op[i], ri + i, PREG_FP, spill_base - i * 4);
     }
 
     /* ---- Set up parameter symbol locations ---- */
@@ -1128,12 +1156,11 @@ ST_FUNC void gfunc_epilog(void)
     ind = func_sub_sp_offset;
 
     if (d <= 32767) {
-        /* Small frame: 4 instructions + NOP */
+        /* Small frame: 4 instructions */
         o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-d));          /* sp -= d */
         o_I(OP_SW,   PREG_LR, PREG_SP, d - 4);                   /* save LR */
         o_I(OP_SW,   PREG_FP, PREG_SP, d - 8);                   /* save FP */
         o_I(OP_ADDI, PREG_FP, PREG_SP, d);                        /* FP = sp+d */
-        o_I(OP_MOVI, 0, 0, 0);                                    /* NOP */
     } else {
         /* Large frame: jump to extended prolog at end-of-function */
         gjmp_addr(large_ofs_ind);

@@ -1676,6 +1676,16 @@ static inline void write64le(unsigned char *p, uint64_t x) {
 static inline void add64le(unsigned char *p, int64_t x) {
     write64le(p, read64le(p) + x);
 }
+/* Big-endian variants (used by CPUTwo target for data section init) */
+static inline void write16be(unsigned char *p, uint16_t x) {
+    p[0] = x >> 8 & 255;  p[1] = x & 255;
+}
+static inline void write32be(unsigned char *p, uint32_t x) {
+    p[0] = x >> 24; p[1] = x >> 16 & 255; p[2] = x >> 8 & 255; p[3] = x & 255;
+}
+static inline void write64be(unsigned char *p, uint64_t x) {
+    write32be(p, x >> 32);  write32be(p + 4, (uint32_t)x);
+}
 /* ------------ i386-gen.c ------------ */
 #if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64 || defined TCC_TARGET_ARM
 ST_FUNC void g(int c);
