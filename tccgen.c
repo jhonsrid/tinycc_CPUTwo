@@ -7870,25 +7870,13 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 		*(char *)ptr = val;
 		break;
 	    case VT_SHORT:
-#ifdef TCC_TARGET_CPUTWO
-                write16be(ptr, val);
-#else
                 write16le(ptr, val);
-#endif
 		break;
 	    case VT_FLOAT:
-#ifdef TCC_TARGET_CPUTWO
-                write32be(ptr, val);
-#else
                 write32le(ptr, val);
-#endif
 		break;
 	    case VT_DOUBLE:
-#ifdef TCC_TARGET_CPUTWO
-                write64be(ptr, val);
-#else
                 write64le(ptr, val);
-#endif
 		break;
 	    case VT_LDOUBLE:
 #if defined TCC_IS_NATIVE_387
@@ -7928,36 +7916,20 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 	        if (vtop->r & VT_SYM)
 	          greloca(sec, vtop->sym, c, R_DATA_PTR, val);
 	        else
-#ifdef TCC_TARGET_CPUTWO
-	          write64be(ptr, val);
-#else
 	          write64le(ptr, val);
-#endif
 	        break;
             case VT_INT:
-#ifdef TCC_TARGET_CPUTWO
-                write32be(ptr, val);
-#else
                 write32le(ptr, val);
-#endif
                 break;
 #else
 	    case VT_LLONG:
-#ifdef TCC_TARGET_CPUTWO
-                write64be(ptr, val);
-#else
                 write64le(ptr, val);
-#endif
                 break;
             case VT_PTR:
             case VT_INT:
 	        if (vtop->r & VT_SYM)
 	          greloc(sec, vtop->sym, c, R_DATA_PTR);
-#ifdef TCC_TARGET_CPUTWO
-	        write32be(ptr, val);
-#else
 	        write32le(ptr, val);
-#endif
 	        break;
 #endif
 	    default:
