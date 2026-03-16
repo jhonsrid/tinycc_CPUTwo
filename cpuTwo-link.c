@@ -3,6 +3,7 @@
  *
  * Handles ELF machine type, relocation types, and PLT/GOT stubs.
  * Phase 1: static linking only (R_CPUTWO_32 and R_CPUTWO_CALL).
+ * CPUTwo is little-endian: instruction words stored LSB-first.
  */
 
 #ifdef TARGET_DEFS_ONLY
@@ -102,21 +103,21 @@ ST_FUNC void relocate_plt(TCCState *s1)
 }
 
 /* ------------------------------------------------------------------ */
-/* Big-endian helpers (duplicated locally; gen.c defines them too)     */
+/* Little-endian helpers (duplicated locally; gen.c defines them too)  */
 /* ------------------------------------------------------------------ */
 
-static uint32_t lnk_read_be32(const uint8_t *p)
+static uint32_t lnk_read_le32(const uint8_t *p)
 {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
-         | ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+    return  (uint32_t)p[0]        | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) |  ((uint32_t)p[3] << 24);
 }
 
-static void lnk_write_be32(uint8_t *p, uint32_t v)
+static void lnk_write_le32(uint8_t *p, uint32_t v)
 {
-    p[0] = (v >> 24) & 0xFF;
-    p[1] = (v >> 16) & 0xFF;
-    p[2] = (v >>  8) & 0xFF;
-    p[3] = (v >>  0) & 0xFF;
+    p[0] = (v >>  0) & 0xFF;
+    p[1] = (v >>  8) & 0xFF;
+    p[2] = (v >> 16) & 0xFF;
+    p[3] = (v >> 24) & 0xFF;
 }
 
 /* ------------------------------------------------------------------ */
@@ -136,7 +137,7 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
 
     case R_CPUTWO_32:
         /* Absolute 32-bit reference in data section */
-        lnk_write_be32(ptr, lnk_read_be32(ptr) + val);
+        lnk_write_le32(ptr, lnk_read_le32(ptr) + val);
         if (s1->output_type & TCC_OUTPUT_DYN) {
             /* REL format: addend is stored in-place (already written above) */
             qrel->r_offset = rel->r_offset;
@@ -146,7 +147,7 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
         return;
 
     case R_CPUTWO_RELATIVE:
-        lnk_write_be32(ptr, lnk_read_be32(ptr) + val);
+        lnk_write_le32(ptr, lnk_read_le32(ptr) + val);
         return;
 
     case R_CPUTWO_CALL:
@@ -160,9 +161,9 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
                 (long)val, (long)addr, offset);
             return;
         }
-        insn = lnk_read_be32(ptr);
+        insn = lnk_read_le32(ptr);
         /* Patch bits 19:0 with offset, preserve bits 31:20 (opcode + rd/cond) */
-        lnk_write_be32(ptr, (insn & 0xFFF00000u) | ((uint32_t)offset & 0xFFFFFu));
+        lnk_write_le32(ptr, (insn & 0xFFF00000u) | ((uint32_t)offset & 0xFFFFFu));
         return;
     }
 
@@ -170,16 +171,16 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
         /* Patch the imm16 field (bits 15:0) of a LUI instruction with (val >> 16).
          * No +0x8000 rounding: CPUTwo uses ORI (zero-extend) for LO16, not ADDI. */
         uint16_t hi = (uint16_t)(val >> 16);
-        insn = lnk_read_be32(ptr);
-        lnk_write_be32(ptr, (insn & 0xFFFF0000u) | hi);
+        insn = lnk_read_le32(ptr);
+        lnk_write_le32(ptr, (insn & 0xFFFF0000u) | hi);
         return;
     }
 
     case R_CPUTWO_LO16: {
         /* Patch imm16 field of ORI/ADDI with (val & 0xFFFF) */
         uint16_t lo = (uint16_t)(val & 0xFFFFu);
-        insn = lnk_read_be32(ptr);
-        lnk_write_be32(ptr, (insn & 0xFFFF0000u) | lo);
+        insn = lnk_read_le32(ptr);
+        lnk_write_le32(ptr, (insn & 0xFFFF0000u) | lo);
         return;
     }
 
@@ -188,7 +189,7 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
 
     case R_CPUTWO_GLOB_DAT:
     case R_CPUTWO_JMP_SLOT:
-        lnk_write_be32(ptr, (uint32_t)val);
+        lnk_write_le32(ptr, (uint32_t)val);
         return;
 
     default:

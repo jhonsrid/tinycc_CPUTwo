@@ -1,7 +1,7 @@
 /*
  * CPUTwo code generator for TCC
  *
- * CPUTwo is a 32-bit big-endian RISC with fixed 32-bit instructions.
+ * CPUTwo is a 32-bit little-endian RISC with fixed 32-bit instructions.
  * See architecture.md for the full ISA reference.
  *
  * Phase 1: integers, branches, function calls (all-stack ABI).
@@ -75,7 +75,7 @@
 ST_DATA const char * const target_machine_defs =
     "__cputwo__\0"
     "__CPUTWO__\0"
-    "__BIG_ENDIAN__\0"
+    "__LITTLE_ENDIAN__\0"
     ;
 
 /* ------------------------------------------------------------------ */
@@ -184,10 +184,10 @@ ST_DATA const int reg_classes[NB_REGS] = {
 #define FUNC_PROLOG_SIZE (4 * 4)
 
 /* ------------------------------------------------------------------ */
-/* Big-endian instruction emission                                      */
+/* Little-endian instruction emission                                   */
 /* ------------------------------------------------------------------ */
 
-/* Emit one 32-bit big-endian instruction word */
+/* Emit one 32-bit little-endian instruction word */
 ST_FUNC void o(unsigned int insn)
 {
     int ind1 = ind + 4;
@@ -195,25 +195,25 @@ ST_FUNC void o(unsigned int insn)
         return;
     if (ind1 > cur_text_section->data_allocated)
         section_realloc(cur_text_section, ind1);
-    cur_text_section->data[ind+0] = (insn >> 24) & 0xFF;
-    cur_text_section->data[ind+1] = (insn >> 16) & 0xFF;
-    cur_text_section->data[ind+2] = (insn >>  8) & 0xFF;
-    cur_text_section->data[ind+3] = (insn >>  0) & 0xFF;
+    cur_text_section->data[ind+0] = (insn >>  0) & 0xFF;
+    cur_text_section->data[ind+1] = (insn >>  8) & 0xFF;
+    cur_text_section->data[ind+2] = (insn >> 16) & 0xFF;
+    cur_text_section->data[ind+3] = (insn >> 24) & 0xFF;
     ind = ind1;
 }
 
-static uint32_t read_be32(uint8_t *p)
+static uint32_t read_le32(uint8_t *p)
 {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
-         | ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+    return  (uint32_t)p[0]        | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) |  ((uint32_t)p[3] << 24);
 }
 
-static void write_be32(uint8_t *p, uint32_t v)
+static void write_le32(uint8_t *p, uint32_t v)
 {
-    p[0] = (v >> 24) & 0xFF;
-    p[1] = (v >> 16) & 0xFF;
-    p[2] = (v >>  8) & 0xFF;
-    p[3] = (v >>  0) & 0xFF;
+    p[0] = (v >>  0) & 0xFF;
+    p[1] = (v >>  8) & 0xFF;
+    p[2] = (v >> 16) & 0xFF;
+    p[3] = (v >> 24) & 0xFF;
 }
 
 /* ------------------------------------------------------------------ */
@@ -857,12 +857,12 @@ ST_FUNC void gen_fill_nops(int bytes)
 /* ------------------------------------------------------------------ */
 
 /* Emit unconditional forward branch; chain with t.
-   The stored raw big-endian word IS the chain pointer (0 = end of chain). */
+   The stored raw little-endian word IS the chain pointer (0 = end of chain). */
 ST_FUNC int gjmp(int t)
 {
     if (nocode_wanted)
         return t;
-    /* Store 't' as a raw big-endian word (the chain link).
+    /* Store 't' as a raw little-endian word (the chain link).
        This location will be patched by gsym_addr() to a real BA instruction. */
     o(t);
     return ind - 4;
@@ -888,11 +888,11 @@ ST_FUNC void gsym_addr(int t_, int a_)
     uint32_t a = (uint32_t)a_;
     while (t) {
         uint8_t  *ptr  = cur_text_section->data + t;
-        uint32_t  next = read_be32(ptr);          /* chain pointer stored in the word */
+        uint32_t  next = read_le32(ptr);          /* chain pointer stored in the word */
         int32_t   off  = (int32_t)(a - t);
         if (off < -(1 << 19) || off >= (1 << 19))
             tcc_error("gsym_addr: branch out of range (off=%d)", off);
-        write_be32(ptr, ((uint32_t)OP_B << 24) | (COND_BA << 20) | (off & 0xFFFFF));
+        write_le32(ptr, ((uint32_t)OP_B << 24) | (COND_BA << 20) | (off & 0xFFFFF));
         t = next;
     }
 }
@@ -904,10 +904,10 @@ ST_FUNC int gjmp_append(int n, int t)
     if (n) {
         uint32_t n1 = n, n2;
         /* Walk to end of chain n */
-        while ((n2 = read_be32(p = cur_text_section->data + n1)))
+        while ((n2 = read_le32(p = cur_text_section->data + n1)))
             n1 = n2;
         /* Link end of n to t */
-        write_be32(p, t);
+        write_le32(p, t);
         t = n;
     }
     return t;
@@ -1037,10 +1037,10 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         Sym *s = func_type->ref->next;
         for (; s && (ri + nreg_explicit) < 4; s = s->next) {
             int bt = s->type.t & VT_BTYPE;
-            /* On big-endian, use narrow stores so that LB/LBU/LH/LHU in the
-             * function body read the correct byte/halfword from the spill slot.
-             * SW stores the value at addr..addr+3 with the byte at addr+3 (LE
-             * position), but LBU reads from addr (the MSB = 0x00). */
+            /* Use narrow stores so that LB/LBU/LH/LHU in the function body
+             * read the correct byte/halfword from the spill slot.
+             * On little-endian, SB/SH place the value at the lowest address
+             * where LB/LBU/LH/LHU will read it correctly. */
             if (bt == VT_BYTE || bt == VT_BOOL)
                 spill_op[nreg_explicit] = OP_SB;
             else if (bt == VT_SHORT)

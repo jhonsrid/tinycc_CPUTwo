@@ -350,7 +350,6 @@ case "$cpu" in
   ;;
   cputwo)
     cpu="cputwo"
-    bigendian="yes"
   ;;
   *)
     echo "Unsupported CPU"

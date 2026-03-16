@@ -1,8 +1,8 @@
 /*
  * CPUTwo inline assembler for TCC
  *
- * CPUTwo is a 32-bit big-endian RISC CPU.
- * All instructions are 32-bit, big-endian encoded.
+ * CPUTwo is a 32-bit little-endian RISC CPU.
+ * All instructions are 32-bit, little-endian encoded.
  */
 
 #ifdef TARGET_DEFS_ONLY
@@ -19,10 +19,7 @@ ST_FUNC void gen_le32(int c);
 #define USING_GLOBALS
 #include "tcc.h"
 
-/* --- Byte/half/word emission (big-endian) ---
- * Despite the "le" names (inherited from TCC template), these emit
- * big-endian bytes for CPUTwo.
- */
+/* --- Byte/half/word emission (little-endian) --- */
 ST_FUNC void g(int c)
 {
     int ind1;
@@ -37,21 +34,19 @@ ST_FUNC void g(int c)
 
 ST_FUNC void gen_le16(int i)
 {
-    /* big-endian halfword */
-    g(i >> 8);
     g(i);
+    g(i >> 8);
 }
 
 ST_FUNC void gen_le32(int i)
 {
-    /* big-endian word */
-    g(i >> 24);
-    g(i >> 16);
-    g(i >> 8);
     g(i);
+    g(i >> 8);
+    g(i >> 16);
+    g(i >> 24);
 }
 
-/* gen_expr32: emit a 32-bit address/value (big-endian) */
+/* gen_expr32: emit a 32-bit address/value (little-endian) */
 ST_FUNC void gen_expr32(ExprValue *pe)
 {
     gen_le32(pe->v);
