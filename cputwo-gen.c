@@ -46,7 +46,7 @@
 #define LDOUBLE_ALIGN   4
 #define MAX_ALIGN       8
 
-/* CONFIG_TCC_ASM is defined in cpuTwo-asm.c (included after this file) */
+/* CONFIG_TCC_ASM is defined in cputwo-asm.c (included after this file) */
 
 /* Custom ELF relocation types for CPUTwo */
 #define R_CPUTWO_NONE      0

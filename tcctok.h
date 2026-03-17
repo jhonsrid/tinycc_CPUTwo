@@ -430,5 +430,5 @@
 #endif
 
 #if defined TCC_TARGET_CPUTWO
-#include "cpuTwo-tok.h"
+#include "cputwo-tok.h"
 #endif

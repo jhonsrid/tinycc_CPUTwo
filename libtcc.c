@@ -54,9 +54,9 @@
 #include "riscv64-link.c"
 #include "riscv64-asm.c"
 #elif defined(TCC_TARGET_CPUTWO)
-#include "cpuTwo-gen.c"
-#include "cpuTwo-link.c"
-#include "cpuTwo-asm.c"
+#include "cputwo-gen.c"
+#include "cputwo-link.c"
+#include "cputwo-asm.c"
 #else
 #error unknown target
 #endif

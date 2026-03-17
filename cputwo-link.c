@@ -193,7 +193,7 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type,
         return;
 
     default:
-        fprintf(stderr, "cpuTwo-link: unhandled reloc type %d at 0x%lx\n",
+        fprintf(stderr, "cputwo-link: unhandled reloc type %d at 0x%lx\n",
                 type, (long)addr);
         return;
     }
