@@ -250,6 +250,11 @@ static int R2_RET(int t)
 #if PTR_SIZE == 4
     if (t == VT_LLONG)
         return REG_IRE2;
+#if defined(TCC_TARGET_CPUTWO)
+    /* CPUTwo soft-float: double occupies two int regs (r0=lo, r1=hi) */
+    if (t == VT_DOUBLE || t == VT_LDOUBLE)
+        return REG_IRE2;
+#endif
 #elif defined TCC_TARGET_X86_64
     if (t == VT_QLONG)
         return REG_IRE2;

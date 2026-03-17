@@ -283,13 +283,13 @@
     #define __builtin_va_arg(ap,type) (*(sizeof(type) > (2*__va_reg_size) ? *(type **)((ap += __va_reg_size) - __va_reg_size) : (ap = (va_list)(_tcc_align(ap,type) + (sizeof(type)+__va_reg_size - 1)& -__va_reg_size), (type *)(ap - ((sizeof(type)+ __va_reg_size - 1)& -__va_reg_size)))))
 
 #elif defined TCC_TARGET_CPUTWO
-    /* CPUTwo: register-based ABI, args spilled at decreasing offsets from FP.
-     * gfunc_prolog spills r0-r3 to [FP-12],[FP-16],[FP-20],[FP-24].
-     * va_start: ap = &last - sizeof(last) → points to first variadic slot.
-     * va_arg: decrement ap, then read from ap+sizeof(t) (= old ap). */
+    /* CPUTwo variadic ABI: for variadic functions, gfunc_prolog spills r(ri+0)
+     * to r(ri+nreg-1) at [FP-4*nreg]..[FP-4], adjacent to stack args at [FP+0].
+     * va_start: ap = &last + sizeof(last) → first variadic slot (ascending).
+     * va_arg: read from ap, then increment ap by sizeof(t). */
     typedef char *__builtin_va_list;
-    #define __builtin_va_start(ap,last) (ap = ((char *)&(last)) - ((sizeof(last)+3)&~3))
-    #define __builtin_va_arg(ap,t) (*(t *)((ap -= ((sizeof(t)+3)&~3)) + ((sizeof(t)+3)&~3)))
+    #define __builtin_va_start(ap,last) (ap = ((char *)&(last)) + ((sizeof(last)+3)&~3))
+    #define __builtin_va_arg(ap,t) (*(t*)((ap+=(sizeof(t)+3)&~3)-((sizeof(t)+3)&~3)))
 
 #else /* __i386__ */
     typedef char *__builtin_va_list;

@@ -282,6 +282,8 @@ static void load_imm32(int rd, uint32_t val)
 /* ------------------------------------------------------------------ */
 
 static int func_sub_sp_offset;  /* ind of prolog placeholder */
+static int func_lr_off;          /* FP-relative offset where LR is saved */
+static int func_fp_off;          /* FP-relative offset where old FP is saved */
 
 /* ------------------------------------------------------------------ */
 /* load() — load an SValue into a register                             */
@@ -324,26 +326,34 @@ ST_FUNC void load(int r, SValue *sv)
         } else if (v == VT_CONST) {
             /* absolute address */
             if (fr & VT_SYM) {
-                /* symbol + addend: emit HI16/LO16 reloc pair */
-                greloca(cur_text_section, sv->sym, ind, R_CPUTWO_HI16, fc);
+                /* Load symbol base address; use fc as the memory-instruction
+                   offset.  Passing addend=0 to HI16/LO16 avoids the REL-format
+                   addend-embedding bug in tccelf.c (big-endian write before
+                   instruction emission overwrites the bytes). */
+                greloca(cur_text_section, sv->sym, ind, R_CPUTWO_HI16, 0);
                 o_I(OP_LUI, rr, 0, 0);            /* patched by HI16 reloc */
-                greloca(cur_text_section, sv->sym, ind, R_CPUTWO_LO16, fc);
+                greloca(cur_text_section, sv->sym, ind, R_CPUTWO_LO16, 0);
                 o_I(OP_ORI, rr, rr, 0);           /* patched by LO16 reloc */
+                /* rr = sym base; fc is the member/element byte offset */
+                o_I(op, rr, rr, fc);
             } else {
                 load_imm32(rr, (uint32_t)fc);
+                o_I(op, rr, rr, 0);
             }
-            o_I(op, rr, rr, 0);
         } else {
             tcc_error("load: unhandled lval case v=0x%x", v);
         }
     } else if (v == VT_CONST) {
         /* Load constant value (not lval — just the address or integer) */
         if (fr & VT_SYM) {
-            /* Address of a symbol */
-            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_HI16, fc);
+            /* Load symbol base address with addend=0; then apply fc offset
+               via ADDI to avoid the REL-format addend-embedding bug. */
+            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_HI16, 0);
             o_I(OP_LUI, rr, 0, 0);
-            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_LO16, fc);
+            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_LO16, 0);
             o_I(OP_ORI, rr, rr, 0);
+            if (fc != 0)
+                o_I(OP_ADDI, rr, rr, fc);   /* rr = sym_base + fc */
         } else {
             load_imm32(rr, (uint32_t)fc);
         }
@@ -432,14 +442,18 @@ ST_FUNC void store(int r, SValue *sv)
         o_I(op, rr, ireg(fr), 0);
     } else if (fr == VT_CONST) {
         if (sv->r & VT_SYM) {
-            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_HI16, fc);
+            /* Load symbol base address with addend=0; use fc as the
+               memory-instruction offset to avoid the REL-format
+               addend-embedding bug. */
+            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_HI16, 0);
             o_I(OP_LUI, PREG_SCR, 0, 0);
-            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_LO16, fc);
+            greloca(cur_text_section, sv->sym, ind, R_CPUTWO_LO16, 0);
             o_I(OP_ORI, PREG_SCR, PREG_SCR, 0);
+            o_I(op, rr, PREG_SCR, fc);
         } else {
             load_imm32(PREG_SCR, (uint32_t)fc);
+            o_I(op, rr, PREG_SCR, 0);
         }
-        o_I(op, rr, PREG_SCR, 0);
     } else {
         tcc_error("store: unhandled case");
     }
@@ -956,29 +970,90 @@ ST_FUNC int gjmp_cond(int op, int t)
  * vtop[-(nb_args-1)] = arg[0]       (first arg → r0)
  * vtop[-nb_args]  = function
  */
+/* Returns 2 if t is a 64-bit type (double/llong) needing two register slots,
+   else 1.  Must match the R2_RET treatment in tccgen.c. */
+static int arg_nslots(int t)
+{
+    int bt = t & VT_BTYPE;
+    return (bt == VT_DOUBLE || bt == VT_LDOUBLE || bt == VT_LLONG) ? 2 : 1;
+}
+
 ST_FUNC void gfunc_call(int nb_args)
 {
     int i, r, args_size = 0;
-    int nreg   = nb_args < 4 ? nb_args : 4;   /* args that go in r0-r3 */
-    int nstack = nb_args - nreg;               /* args that go on stack  */
 
-    /* Spill all register values to memory so we can freely use r0-r3 */
+    /* Spill all registers that are live below the function+args */
     save_regs(nb_args + 1);
 
-    /* Push stack args right-to-left: vtop[0]..vtop[nstack-1] */
-    for (i = 0; i < nstack; i++) {
-        r = gv(RC_INT);
-        o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-4));
-        o_I(OP_SW,   ireg(r), PREG_SP, 0);
-        args_size += 4;
-        vtop--;
+    /* Pre-scan: assign a starting register slot to each argument.
+     * 64-bit args (double / llong) consume 2 consecutive slots.
+     * Slots 0-3 map to physical registers r0-r3; slots >= 4 go to the stack.
+     * A 64-bit arg that starts at slot 3 is split: low word in r3,
+     * high word pushed to the stack — this keeps variadic stack frames
+     * contiguous so va_arg traversal works correctly. */
+    int total_slots = 0;
+    int slot_of[16];   /* starting slot of arg i */
+    for (i = 0; i < nb_args; i++) {
+        SValue *sv = &vtop[-(nb_args - 1 - i)];
+        slot_of[i] = total_slots;
+        total_slots += arg_nslots(sv->type.t);
     }
 
-    /* Load register args into r(nreg-1) .. r0.
-       After the nstack pops above, vtop[0]=arg[nreg-1], vtop[-(nreg-1)]=arg[0]. */
-    for (i = nreg - 1; i >= 0; i--) {
-        gv(RC_R(i));   /* force current vtop into physical register i */
-        vtop--;
+    /* Process args right-to-left (vtop[0] = arg[nb_args-1] first).
+     * For each arg we handle whatever is going on the stack here,
+     * then load the register portion. */
+    for (i = nb_args - 1; i >= 0; i--) {
+        int s0 = slot_of[i];
+        int ns = arg_nslots(vtop->type.t);   /* vtop[0] == arg[i] at this point */
+        int s1 = s0 + ns - 1;                /* last slot of this arg */
+
+        if (s0 >= 4) {
+            /* Entirely on the stack */
+            if (ns == 2) {
+                /* 64-bit: load both halves, push high then low so that
+                   low ends up at the lower stack address. */
+                gv(RC_INT);
+                o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-4));
+                o_I(OP_SW,   ireg(vtop->r2), PREG_SP, 0);
+                o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-4));
+                o_I(OP_SW,   ireg(vtop->r),   PREG_SP, 0);
+                args_size += 8;
+            } else {
+                r = gv(RC_INT);
+                o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-4));
+                o_I(OP_SW,   ireg(r), PREG_SP, 0);
+                args_size += 4;
+            }
+            vtop--;
+        } else if (s1 >= 4) {
+            /* Split 64-bit arg: s0=3 in r3, s1=4 (high word) on stack.
+             * Load both halves first, then push the high word.
+             * The low word is left in a register and moved to r3 below. */
+            gv(RC_INT);   /* loads lo→vtop->r, hi→vtop->r2 */
+            /* Push high word (slot 4) */
+            o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-4));
+            o_I(OP_SW,   ireg(vtop->r2), PREG_SP, 0);
+            args_size += 4;
+            /* Move low word into r3 (slot 3) */
+            if (ireg(vtop->r) != 3)
+                o_R(OP_MOV, 3, ireg(vtop->r), 0, 0);
+            vtop--;
+        } else {
+            /* Entirely in registers (slots s0..s1 are all < 4) */
+            if (ns == 2) {
+                /* 64-bit arg: gv forces the low word into r[s0];
+                 * the high word lands in some RC_INT register (vtop->r2).
+                 * Move the high word to r[s0+1] if it isn't already there. */
+                gv(RC_R(s0));
+                if (vtop->r2 < VT_CONST && ireg(vtop->r2) != s0 + 1) {
+                    o_R(OP_MOV, s0 + 1, ireg(vtop->r2), 0, 0);
+                    vtop->r2 = s0 + 1;
+                }
+            } else {
+                gv(RC_R(s0));
+            }
+            vtop--;
+        }
     }
 
     /* vtop[0] = function */
@@ -1032,24 +1107,45 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
 
     /* ---- Count explicit register args and record their types ---- */
     int nreg_explicit = 0;
-    int spill_op[4]; /* store opcode for each reg arg spill */
+    int spill_op[4];  /* store opcode for each reg arg spill slot */
+    int spill_reg[4]; /* physical register for each non-variadic spill slot */
     {
         Sym *s = func_type->ref->next;
         for (; s && (ri + nreg_explicit) < 4; s = s->next) {
             int bt = s->type.t & VT_BTYPE;
-            /* Use narrow stores so that LB/LBU/LH/LHU in the function body
-             * read the correct byte/halfword from the spill slot.
-             * On little-endian, SB/SH place the value at the lowest address
-             * where LB/LBU/LH/LHU will read it correctly. */
-            if (bt == VT_BYTE || bt == VT_BOOL)
-                spill_op[nreg_explicit] = OP_SB;
-            else if (bt == VT_SHORT)
-                spill_op[nreg_explicit] = OP_SH;
-            else
-                spill_op[nreg_explicit] = OP_SW;
-            nreg_explicit++;
+            int is2 = (bt == VT_DOUBLE || bt == VT_LDOUBLE || bt == VT_LLONG);
+            if (is2 && (ri + nreg_explicit + 1) < 4) {
+                /* Two-slot param (double/llong): occupies two register slots.
+                 * For the non-variadic layout (descending addresses), TCC's
+                 * incr_offset(4) expects hi at [poff+4] (higher address).
+                 * We spill: hi reg at slot[i] (higher address = spill_base-i*4)
+                 *           lo reg at slot[i+1] (lower address = spill_base-(i+1)*4)
+                 * so poff = spill_base-(i+1)*4 gives lo, and lo+4 = hi. */
+                spill_op[nreg_explicit]   = OP_SW;
+                spill_reg[nreg_explicit]  = ri + nreg_explicit + 1; /* hi */
+                nreg_explicit++;
+                spill_op[nreg_explicit]   = OP_SW;
+                spill_reg[nreg_explicit]  = ri + nreg_explicit - 1; /* lo */
+                nreg_explicit++;
+            } else {
+                /* Use narrow stores so that LB/LBU/LH/LHU in the function body
+                 * read the correct byte/halfword from the spill slot.
+                 * On little-endian, SB/SH place the value at the lowest address
+                 * where LB/LBU/LH/LHU will read it correctly. */
+                if (bt == VT_BYTE || bt == VT_BOOL)
+                    spill_op[nreg_explicit] = OP_SB;
+                else if (bt == VT_SHORT)
+                    spill_op[nreg_explicit] = OP_SH;
+                else
+                    spill_op[nreg_explicit] = OP_SW;
+                spill_reg[nreg_explicit] = ri + nreg_explicit;
+                nreg_explicit++;
+            }
         }
     }
+    /* Fill remaining slots with natural register assignment (for variadic) */
+    for (int i = nreg_explicit; i < 4; i++)
+        spill_reg[i] = ri + i;
 
     /* For variadic functions, also spill remaining arg registers (after named
      * params) so __builtin_va_arg can find them adjacent in the frame.
@@ -1064,10 +1160,32 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     }
 
     /* ---- Reserve frame slots for reg-arg spills ---- */
-    /* Hidden-ptr spill (if any) already ate [FP - 12].
-       Explicit reg-arg[0] spill goes at loc - 4, etc.            */
-    int spill_base = loc - 4;   /* offset for explicit reg-arg[0] spill */
-    loc -= nreg_spill * 4;
+    int spill_base;
+    if (func_var && !func_vc) {
+        /* Variadic layout: spills placed adjacent to stack args for contiguous
+         * va_arg traversal (increasing address order).
+         *   [FP - nreg_spill*4]  = r(ri+0) spill  ← first/named param
+         *   ...
+         *   [FP - 4]             = r(ri+nreg_spill-1) spill  ← last reg vararg
+         *   [FP + 0]             = first stack vararg (d, e, ...)
+         *   [FP - nreg_spill*4 - 4] = saved old FP
+         *   [FP - nreg_spill*4 - 8] = saved LR
+         * va_start: ap = &last + sizeof(last)  → first vararg slot
+         * va_arg(t): result = *(t*)ap; ap += sizeof(t)              */
+        spill_base    = -(nreg_spill * 4);
+        func_fp_off   = nreg_spill * 4 + 4;
+        func_lr_off   = nreg_spill * 4 + 8;
+        loc           = -func_lr_off;
+    } else {
+        /* Non-variadic layout: spills below LR/FP saves.
+         *   [FP - 4]   = saved LR
+         *   [FP - 8]   = saved old FP
+         *   [FP - 12+] = hidden-ptr spill or reg-arg spills (descending) */
+        func_lr_off = 4;
+        func_fp_off = 8;
+        spill_base  = loc - 4;   /* = -12 normally */
+        loc        -= nreg_spill * 4;
+    }
 
     /* ---- Reserve prolog placeholder (patched in gfunc_epilog) ---- */
     func_sub_sp_offset = ind;
@@ -1079,7 +1197,17 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         o_I(OP_SW, 0, PREG_FP, func_vc);
     }
     for (int i = 0; i < nreg_spill; i++) {
-        o_I(spill_op[i], ri + i, PREG_FP, spill_base - i * 4);
+        int off, reg;
+        if (func_var && !func_vc) {
+            /* Variadic: natural register order, increasing addresses */
+            off = spill_base + i * 4;
+            reg = ri + i;
+        } else {
+            /* Non-variadic: use spill_reg[] which swaps hi/lo for 2-slot params */
+            off = spill_base - i * 4;
+            reg = spill_reg[i];
+        }
+        o_I(spill_op[i], reg, PREG_FP, off);
     }
 
     /* ---- Set up parameter symbol locations ---- */
@@ -1090,10 +1218,24 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     while ((sym = sym->next) != NULL) {
         size  = type_size(&sym->type, &align);
         if (align < 1) align = 1;
+        int bt2 = sym->type.t & VT_BTYPE;
+        int is2 = (bt2 == VT_DOUBLE || bt2 == VT_LDOUBLE || bt2 == VT_LLONG);
         if (ri2 < 4) {
             /* Param arrives in register ri2, spilled to frame */
-            gfunc_set_param(sym, spill_base - (ri2 - ri) * 4, 0);
-            ri2++;
+            int slot = ri2 - ri;
+            int poff;
+            if (func_var && !func_vc) {
+                /* Variadic: poff at slot in natural (increasing-address) order */
+                poff = spill_base + slot * 4;
+            } else if (is2 && ri2 + 1 < 4) {
+                /* Non-variadic 2-slot: poff points to lo (lower address = slot+1).
+                 * hi lives at poff+4 (slot), lo at poff (slot+1). */
+                poff = spill_base - (slot + 1) * 4;
+            } else {
+                poff = spill_base - slot * 4;
+            }
+            gfunc_set_param(sym, poff, 0);
+            ri2 += (is2 && ri2 + 1 < 4) ? 2 : 1;
         } else {
             /* Param is on stack above FP */
             stk_addr = (stk_addr + align - 1) & -align;
@@ -1118,10 +1260,10 @@ ST_FUNC void gfunc_epilog(void)
     /* --- Emit epilog (ret sequence) at current position --- */
     /*   ADDI sp, r11, 0    ← restore SP = old SP             */
     o_I(OP_ADDI, PREG_SP, PREG_FP, 0);
-    /*   LW lr,  [r11 - 4]  ← restore LR                      */
-    o_I(OP_LW,   PREG_LR, PREG_FP, -4);
-    /*   LW r11, [r11 - 8]  ← restore old FP                  */
-    o_I(OP_LW,   PREG_FP, PREG_FP, -8);
+    /*   LW lr,  [r11 - func_lr_off]  ← restore LR            */
+    o_I(OP_LW,   PREG_LR, PREG_FP, -func_lr_off);
+    /*   LW r11, [r11 - func_fp_off]  ← restore old FP        */
+    o_I(OP_LW,   PREG_FP, PREG_FP, -func_fp_off);
     /*   MOV pc, lr          ← return                          */
     o_R(OP_MOV,  PREG_PC, PREG_LR, 0, 0);
 
@@ -1132,11 +1274,11 @@ ST_FUNC void gfunc_epilog(void)
         o_I(OP_LUI,  PREG_SCR, 0, (d >> 16) & 0xFFFF);
         o_I(OP_ORI,  PREG_SCR, PREG_SCR, d & 0xFFFF);
         o_R(OP_SUB,  PREG_SP,  PREG_SP, PREG_SCR, 0);
-        /* SW lr at [sp + d - 4]: we need scratch to compute address */
-        load_imm32(PREG_SCR, (uint32_t)(d - 4));
+        /* SW lr at [sp + d - func_lr_off]: we need scratch to compute address */
+        load_imm32(PREG_SCR, (uint32_t)(d - func_lr_off));
         o_R(OP_ADD,  PREG_SCR, PREG_SP, PREG_SCR, 0);
         o_I(OP_SW,   PREG_LR, PREG_SCR, 0);
-        load_imm32(PREG_SCR, (uint32_t)(d - 8));
+        load_imm32(PREG_SCR, (uint32_t)(d - func_fp_off));
         o_R(OP_ADD,  PREG_SCR, PREG_SP, PREG_SCR, 0);
         o_I(OP_SW,   PREG_FP, PREG_SCR, 0);
         /* ADDI r11, sp, d: only works if d fits, otherwise we need full load */
@@ -1158,8 +1300,8 @@ ST_FUNC void gfunc_epilog(void)
     if (d <= 32767) {
         /* Small frame: 4 instructions */
         o_I(OP_ADDI, PREG_SP, PREG_SP, (uint16_t)(-d));          /* sp -= d */
-        o_I(OP_SW,   PREG_LR, PREG_SP, d - 4);                   /* save LR */
-        o_I(OP_SW,   PREG_FP, PREG_SP, d - 8);                   /* save FP */
+        o_I(OP_SW,   PREG_LR, PREG_SP, d - func_lr_off);          /* save LR */
+        o_I(OP_SW,   PREG_FP, PREG_SP, d - func_fp_off);          /* save FP */
         o_I(OP_ADDI, PREG_FP, PREG_SP, d);                        /* FP = sp+d */
     } else {
         /* Large frame: jump to extended prolog at end-of-function */
